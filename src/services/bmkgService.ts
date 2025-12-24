@@ -1,5 +1,5 @@
 import axios from "axios";
-import { upsertEarthquake, SupabaseEarthquake } from "../database/supabase";
+import { upsertEarthquake, SupabaseEarthquake } from "../database/supabase.js";
 
 const BMKG_BASE_URL = "https://data.bmkg.go.id";
 

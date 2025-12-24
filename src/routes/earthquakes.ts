@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
-import { supabase, isSupabaseAvailable } from "../database/supabase";
-import { Earthquake } from "../database/schema";
-import { calculateDistance } from "../utils/distance";
+import { supabase, isSupabaseAvailable } from "../database/supabase.js";
+import { Earthquake } from "../database/schema.js";
+import { calculateDistance } from "../utils/distance.js";
 
 const router = Router();
 

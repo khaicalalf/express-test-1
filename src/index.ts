@@ -2,9 +2,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import cron from "node-cron";
-import { fetchAllEarthquakes } from "./services/bmkgService";
-import earthquakesRouter from "./routes/earthquakes";
-import { isSupabaseAvailable } from "./database/supabase";
+import { fetchAllEarthquakes } from "./services/bmkgService.js";
+import earthquakesRouter from "./routes/earthquakes.js";
+import { isSupabaseAvailable } from "./database/supabase.js";
 
 // Load environment variables
 dotenv.config();
