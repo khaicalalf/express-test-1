@@ -1,6 +1,4 @@
 import axios from "axios";
-import db from "../database/db";
-import { Earthquake } from "../database/schema";
 import { upsertEarthquake, SupabaseEarthquake } from "../database/supabase";
 
 const BMKG_BASE_URL = "https://data.bmkg.go.id";
@@ -27,9 +25,9 @@ interface BMKGResponse {
 }
 
 /**
- * Parse BMKG earthquake data and insert into database (SQLite + Supabase)
+ * Parse BMKG earthquake data and insert into Supabase
  */
-function parseAndInsertEarthquake(data: BMKGEarthquake): void {
+async function parseAndInsertEarthquake(data: BMKGEarthquake): Promise<void> {
   try {
     // Parse coordinates
     const coords = data.Coordinates.split(",");
@@ -51,8 +49,8 @@ function parseAndInsertEarthquake(data: BMKGEarthquake): void {
     const timestamp = new Date(data.DateTime).getTime();
     const created_at = Date.now();
 
-    // Prepare earthquake object
-    const earthquakeData = {
+    // Prepare earthquake object for Supabase
+    const earthquakeData: SupabaseEarthquake = {
       id,
       datetime,
       timestamp,
@@ -67,34 +65,16 @@ function parseAndInsertEarthquake(data: BMKGEarthquake): void {
       created_at,
     };
 
-    // Insert into SQLite
-    const insert = db.prepare(`
-      INSERT OR REPLACE INTO earthquakes 
-      (id, datetime, timestamp, magnitude, depth, latitude, longitude, region, tsunami_potential, felt_status, shakemap_url, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    // Insert into Supabase
+    const success = await upsertEarthquake(earthquakeData);
 
-    insert.run(
-      earthquakeData.id,
-      earthquakeData.datetime,
-      earthquakeData.timestamp,
-      earthquakeData.magnitude,
-      earthquakeData.depth,
-      earthquakeData.latitude,
-      earthquakeData.longitude,
-      earthquakeData.region,
-      earthquakeData.tsunami_potential,
-      earthquakeData.felt_status,
-      earthquakeData.shakemap_url,
-      earthquakeData.created_at
-    );
-
-    // Also insert into Supabase (async, non-blocking)
-    upsertEarthquake(earthquakeData as SupabaseEarthquake).catch((error) => {
-      console.error(`⚠️  Supabase sync failed for ${id}:`, error);
-    });
-
-    console.log(`✅ Inserted earthquake: M${magnitude} - ${data.Wilayah}`);
+    if (success) {
+      console.log(`✅ Inserted earthquake: M${magnitude} - ${data.Wilayah}`);
+    } else {
+      console.log(
+        `⚠️  Failed to insert earthquake: M${magnitude} - ${data.Wilayah}`
+      );
+    }
   } catch (error) {
     console.error("Error parsing earthquake data:", error);
   }
@@ -112,20 +92,12 @@ export async function fetchLatestEarthquake(): Promise<void> {
 
     const gempa = response.data.Infogempa.gempa;
     if (gempa && !Array.isArray(gempa)) {
-      parseAndInsertEarthquake(gempa);
+      await parseAndInsertEarthquake(gempa);
     }
 
-    // Log fetch
-    const log = db.prepare(
-      "INSERT INTO fetch_logs (fetch_type, status, message) VALUES (?, ?, ?)"
-    );
-    log.run("autogempa", "success", "Fetched latest earthquake");
+    console.log("✅ Fetched latest earthquake");
   } catch (error: any) {
     console.error("Error fetching latest earthquake:", error.message);
-    const log = db.prepare(
-      "INSERT INTO fetch_logs (fetch_type, status, message) VALUES (?, ?, ?)"
-    );
-    log.run("autogempa", "error", error.message);
   }
 }
 
@@ -141,23 +113,13 @@ export async function fetchM5Earthquakes(): Promise<void> {
 
     const gempaList = response.data.Infogempa.gempa;
     if (Array.isArray(gempaList)) {
-      gempaList.forEach(parseAndInsertEarthquake);
+      for (const gempa of gempaList) {
+        await parseAndInsertEarthquake(gempa);
+      }
+      console.log(`✅ Fetched ${gempaList.length} M5.0+ earthquakes`);
     }
-
-    const log = db.prepare(
-      "INSERT INTO fetch_logs (fetch_type, status, message) VALUES (?, ?, ?)"
-    );
-    log.run(
-      "gempaterkini",
-      "success",
-      `Fetched ${gempaList} M5.0+ earthquakes`
-    );
   } catch (error: any) {
     console.error("Error fetching M5.0+ earthquakes:", error.message);
-    const log = db.prepare(
-      "INSERT INTO fetch_logs (fetch_type, status, message) VALUES (?, ?, ?)"
-    );
-    log.run("gempaterkini", "error", error.message);
   }
 }
 
@@ -173,23 +135,13 @@ export async function fetchFeltEarthquakes(): Promise<void> {
 
     const gempaList = response.data.Infogempa.gempa;
     if (Array.isArray(gempaList)) {
-      gempaList.forEach(parseAndInsertEarthquake);
+      for (const gempa of gempaList) {
+        await parseAndInsertEarthquake(gempa);
+      }
+      console.log(`✅ Fetched ${gempaList.length} felt earthquakes`);
     }
-
-    const log = db.prepare(
-      "INSERT INTO fetch_logs (fetch_type, status, message) VALUES (?, ?, ?)"
-    );
-    log.run(
-      "gempadirasakan",
-      "success",
-      `Fetched ${gempaList} felt earthquakes`
-    );
   } catch (error: any) {
     console.error("Error fetching felt earthquakes:", error.message);
-    const log = db.prepare(
-      "INSERT INTO fetch_logs (fetch_type, status, message) VALUES (?, ?, ?)"
-    );
-    log.run("gempadirasakan", "error", error.message);
   }
 }
 

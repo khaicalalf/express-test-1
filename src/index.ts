@@ -2,9 +2,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import cron from "node-cron";
-//import { initializeDatabase } from "./database/schema";
 import { fetchAllEarthquakes } from "./services/bmkgService";
 import earthquakesRouter from "./routes/earthquakes";
+import { isSupabaseAvailable } from "./database/supabase";
 
 // Load environment variables
 dotenv.config();
@@ -16,19 +16,27 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize database
-//initializeDatabase();
+// Check Supabase configuration
+if (!isSupabaseAvailable()) {
+  console.warn("⚠️  WARNING: Supabase is not configured!");
+  console.warn(
+    "⚠️  Please set SUPABASE_URL and SUPABASE_ANON_KEY in your .env file"
+  );
+  console.warn("⚠️  The API will not work without database configuration");
+} else {
+  // Initial fetch only if Supabase is available
+  console.log("🚀 Starting initial earthquake data fetch...");
+  fetchAllEarthquakes();
 
-// Initial fetch
-console.log("🚀 Starting initial earthquake data fetch...");
-fetchAllEarthquakes();
-
-// Schedule periodic fetches (every 5 minutes by default)
-// const fetchInterval = parseInt(process.env.FETCH_INTERVAL || "5");
-// cron.schedule(`*/${fetchInterval} * * * *`, () => {
-//   console.log(`⏰ Scheduled fetch triggered (every ${fetchInterval} minutes)`);
-//   fetchAllEarthquakes();
-// });
+  // Schedule periodic fetches (every 5 minutes by default)
+  const fetchInterval = parseInt(process.env.FETCH_INTERVAL || "5");
+  cron.schedule(`*/${fetchInterval} * * * *`, () => {
+    console.log(
+      `⏰ Scheduled fetch triggered (every ${fetchInterval} minutes)`
+    );
+    fetchAllEarthquakes();
+  });
+}
 
 // Routes
 app.get("/", (req, res) => {
@@ -36,6 +44,7 @@ app.get("/", (req, res) => {
     message: "Earthquake Early Warning API - Indonesia",
     version: "1.0.0",
     dataSource: "BMKG Indonesia",
+    database: isSupabaseAvailable() ? "Supabase (Connected)" : "Not Configured",
     endpoints: {
       earthquakes: "/api/earthquakes",
       latest: "/api/earthquakes/latest",
@@ -68,6 +77,10 @@ app.use(
 app.listen(PORT, () => {
   console.log(`\n🌍 Earthquake Early Warning Server`);
   console.log(`📡 Server running on http://localhost:${PORT}`);
-  //console.log(`🔄 Auto-fetch interval: ${fetchInterval} minutes`);
+  if (isSupabaseAvailable()) {
+    console.log(
+      `🔄 Auto-fetch interval: ${process.env.FETCH_INTERVAL || 5} minutes`
+    );
+  }
   console.log(`📊 Data source: BMKG Indonesia\n`);
 });

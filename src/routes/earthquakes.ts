@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import db from "../database/db";
+import { supabase, isSupabaseAvailable } from "../database/supabase";
 import { Earthquake } from "../database/schema";
 import { calculateDistance } from "../utils/distance";
 
@@ -9,8 +9,16 @@ const router = Router();
  * GET /api/earthquakes
  * Get all earthquakes with optional filters
  */
-router.get("/", (req: Request, res: Response) => {
+router.get("/", async (req: Request, res: Response) => {
   try {
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        success: false,
+        error:
+          "Database not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+      });
+    }
+
     const {
       limit = "50",
       offset = "0",
@@ -18,47 +26,36 @@ router.get("/", (req: Request, res: Response) => {
       maxMagnitude,
     } = req.query;
 
-    let query = "SELECT * FROM earthquakes WHERE 1=1";
-    const params: any[] = [];
+    let query = supabase!.from("earthquakes").select("*", { count: "exact" });
 
     if (minMagnitude) {
-      query += " AND magnitude >= ?";
-      params.push(parseFloat(minMagnitude as string));
+      query = query.gte("magnitude", parseFloat(minMagnitude as string));
     }
 
     if (maxMagnitude) {
-      query += " AND magnitude <= ?";
-      params.push(parseFloat(maxMagnitude as string));
+      query = query.lte("magnitude", parseFloat(maxMagnitude as string));
     }
 
-    query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?";
-    params.push(parseInt(limit as string), parseInt(offset as string));
+    const {
+      data: earthquakes,
+      error,
+      count,
+    } = await query
+      .order("timestamp", { ascending: false })
+      .range(
+        parseInt(offset as string),
+        parseInt(offset as string) + parseInt(limit as string) - 1
+      );
 
-    const earthquakes = db.prepare(query).all(...params) as Earthquake[];
-
-    // Get total count
-    let countQuery = "SELECT COUNT(*) as total FROM earthquakes WHERE 1=1";
-    const countParams: any[] = [];
-
-    if (minMagnitude) {
-      countQuery += " AND magnitude >= ?";
-      countParams.push(parseFloat(minMagnitude as string));
+    if (error) {
+      throw new Error(error.message);
     }
-
-    if (maxMagnitude) {
-      countQuery += " AND magnitude <= ?";
-      countParams.push(parseFloat(maxMagnitude as string));
-    }
-
-    const { total } = db.prepare(countQuery).get(...countParams) as {
-      total: number;
-    };
 
     res.json({
       success: true,
       data: earthquakes,
       pagination: {
-        total,
+        total: count || 0,
         limit: parseInt(limit as string),
         offset: parseInt(offset as string),
       },
@@ -75,13 +72,27 @@ router.get("/", (req: Request, res: Response) => {
  * GET /api/earthquakes/latest
  * Get the latest earthquake
  */
-router.get("/latest", (req: Request, res: Response) => {
+router.get("/latest", async (req: Request, res: Response) => {
   try {
-    const earthquake = db
-      .prepare("SELECT * FROM earthquakes ORDER BY timestamp DESC LIMIT 1")
-      .get() as Earthquake;
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        success: false,
+        error:
+          "Database not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+      });
+    }
 
-    if (!earthquake) {
+    const { data: earthquakes, error } = await supabase!
+      .from("earthquakes")
+      .select("*")
+      .order("timestamp", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    if (!earthquakes || earthquakes.length === 0) {
       return res.status(404).json({
         success: false,
         error: "No earthquakes found",
@@ -90,7 +101,7 @@ router.get("/latest", (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      data: earthquake,
+      data: earthquakes[0],
     });
   } catch (error: any) {
     res.status(500).json({
@@ -104,8 +115,16 @@ router.get("/latest", (req: Request, res: Response) => {
  * GET /api/earthquakes/nearby
  * Get earthquakes within a radius of coordinates
  */
-router.get("/nearby", (req: Request, res: Response) => {
+router.get("/nearby", async (req: Request, res: Response) => {
   try {
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        success: false,
+        error:
+          "Database not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+      });
+    }
+
     const { lat, lng, radius = "100" } = req.query;
 
     if (!lat || !lng) {
@@ -120,12 +139,17 @@ router.get("/nearby", (req: Request, res: Response) => {
     const radiusKm = parseFloat(radius as string);
 
     // Get all earthquakes and filter by distance
-    const allEarthquakes = db
-      .prepare("SELECT * FROM earthquakes ORDER BY timestamp DESC")
-      .all() as Earthquake[];
+    const { data: allEarthquakes, error } = await supabase!
+      .from("earthquakes")
+      .select("*")
+      .order("timestamp", { ascending: false });
 
-    const nearbyEarthquakes = allEarthquakes
-      .map((eq) => {
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const nearbyEarthquakes = (allEarthquakes || [])
+      .map((eq: Earthquake) => {
         const distance = calculateDistance(
           userLat,
           userLng,
@@ -161,48 +185,86 @@ router.get("/nearby", (req: Request, res: Response) => {
  * GET /api/earthquakes/stats
  * Get earthquake statistics
  */
-router.get("/stats", (req: Request, res: Response) => {
+router.get("/stats", async (req: Request, res: Response) => {
   try {
-    const total = db
-      .prepare("SELECT COUNT(*) as count FROM earthquakes")
-      .get() as {
-      count: number;
-    };
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        success: false,
+        error:
+          "Database not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+      });
+    }
 
-    const strongest = db
-      .prepare("SELECT * FROM earthquakes ORDER BY magnitude DESC LIMIT 1")
-      .get() as Earthquake;
+    // Get total count
+    const { count: total, error: totalError } = await supabase!
+      .from("earthquakes")
+      .select("*", { count: "exact", head: true });
 
+    if (totalError) {
+      throw new Error(totalError.message);
+    }
+
+    // Get strongest earthquake
+    const { data: strongestData, error: strongestError } = await supabase!
+      .from("earthquakes")
+      .select("*")
+      .order("magnitude", { ascending: false })
+      .limit(1);
+
+    if (strongestError) {
+      throw new Error(strongestError.message);
+    }
+
+    const strongest = strongestData?.[0] || null;
+
+    // Get today's count
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayTimestamp = today.getTime();
 
-    const todayCount = db
-      .prepare("SELECT COUNT(*) as count FROM earthquakes WHERE timestamp >= ?")
-      .get(todayTimestamp) as { count: number };
+    const { count: todayCount, error: todayError } = await supabase!
+      .from("earthquakes")
+      .select("*", { count: "exact", head: true })
+      .gte("timestamp", todayTimestamp);
 
-    const byMagnitude = db
-      .prepare(
-        `
-      SELECT 
-        CASE 
-          WHEN magnitude < 5 THEN '<5'
-          WHEN magnitude >= 5 AND magnitude < 6 THEN '5-6'
-          WHEN magnitude >= 6 AND magnitude < 7 THEN '6-7'
-          ELSE '7+'
-        END as range,
-        COUNT(*) as count
-      FROM earthquakes
-      GROUP BY range
-    `
-      )
-      .all() as { range: string; count: number }[];
+    if (todayError) {
+      throw new Error(todayError.message);
+    }
+
+    // Get all earthquakes for magnitude grouping
+    const { data: allEarthquakes, error: allError } = await supabase!
+      .from("earthquakes")
+      .select("magnitude");
+
+    if (allError) {
+      throw new Error(allError.message);
+    }
+
+    // Group by magnitude ranges
+    const byMagnitude = [
+      { range: "<5", count: 0 },
+      { range: "5-6", count: 0 },
+      { range: "6-7", count: 0 },
+      { range: "7+", count: 0 },
+    ];
+
+    (allEarthquakes || []).forEach((eq: { magnitude: number }) => {
+      if (eq.magnitude < 5) {
+        byMagnitude[0].count++;
+      } else if (eq.magnitude >= 5 && eq.magnitude < 6) {
+        byMagnitude[1].count++;
+      } else if (eq.magnitude >= 6 && eq.magnitude < 7) {
+        byMagnitude[2].count++;
+      } else {
+        byMagnitude[3].count++;
+      }
+    });
 
     res.json({
       success: true,
       data: {
-        total: total.count,
-        todayCount: todayCount.count,
+        total: total || 0,
+        todayCount: todayCount || 0,
         strongest,
         byMagnitude,
       },
@@ -219,15 +281,29 @@ router.get("/stats", (req: Request, res: Response) => {
  * GET /api/earthquakes/:id
  * Get a specific earthquake by ID
  */
-router.get("/:id", (req: Request, res: Response) => {
+router.get("/:id", async (req: Request, res: Response) => {
   try {
+    if (!isSupabaseAvailable()) {
+      return res.status(503).json({
+        success: false,
+        error:
+          "Database not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .env",
+      });
+    }
+
     const { id } = req.params;
 
-    const earthquake = db
-      .prepare("SELECT * FROM earthquakes WHERE id = ?")
-      .get(id) as Earthquake;
+    const { data: earthquakes, error } = await supabase!
+      .from("earthquakes")
+      .select("*")
+      .eq("id", id)
+      .limit(1);
 
-    if (!earthquake) {
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    if (!earthquakes || earthquakes.length === 0) {
       return res.status(404).json({
         success: false,
         error: "Earthquake not found",
@@ -236,7 +312,7 @@ router.get("/:id", (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      data: earthquake,
+      data: earthquakes[0],
     });
   } catch (error: any) {
     res.status(500).json({
